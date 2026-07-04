@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ポーカーAI テーブル</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #12241a; color: #fff; margin: 0; padding: 12px; }
+  #topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  #topbar h1 { font-size: 17px; margin: 0 12px 0 0; }
+  .badge { background: #ffd54f; color: #222; border-radius: 12px; font-size: 12px; padding: 3px 12px; font-weight: bold; }
+
+  #tableWrap { max-width: 960px; margin: 0 auto; }
+  #table { position: relative; width: 100%; padding-top: 56%; background: #1e6b44;
+           border-radius: 50% / 50%; border: 10px solid #5d3a1a; box-shadow: inset 0 0 60px rgba(0,0,0,.35); }
+
+  .seat { position: absolute; transform: translate(-50%, -50%); width: 148px;
+          background: rgba(0,0,0,.55); border-radius: 10px; padding: 6px 10px; text-align: center;
+          border: 2px solid transparent; transition: border-color .2s, opacity .3s; }
+  .seat.turn { border-color: #ffd54f; }
+  .seat.folded { opacity: .35; }
+  .seat.out { opacity: .2; }
+  .seat .name { font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; }
+  .seat .style { font-size: 10px; color: #ffd54f; white-space: nowrap; overflow: hidden; }
+  .seat .chips { font-size: 12px; color: #b2dfdb; }
+
+  .bubble { position: absolute; left: 50%; transform: translateX(-50%); top: -26px;
+            font-size: 11px; font-weight: bold; padding: 3px 10px; border-radius: 12px;
+            background: #eee; color: #222; white-space: nowrap; opacity: 0; transition: opacity .2s; }
+  .bubble.show { opacity: 1; }
+  .bubble.fold { background: #9e9e9e; }
+  .bubble.call { background: #64b5f6; }
+  .bubble.raise { background: #ef5350; color: #fff; }
+  .bubble.allin { background: #ab47bc; color: #fff; }
+
+  .bet { position: absolute; transform: translate(-50%, -50%); background: #ffd54f; color: #222;
+         font-size: 11px; font-weight: bold; border-radius: 12px; padding: 2px 8px; }
+
+  #center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; }
+  #pot { font-size: 14px; color: #ffd54f; font-weight: bold; margin-bottom: 6px; }
+  .card { display: inline-block; background: #fff; color: #000; border-radius: 5px;
+          padding: 4px 6px; margin: 0 2px; font-size: 19px; font-weight: bold; min-width: 26px; }
+  .card.red { color: #c62828; }
+  .card.back { background: #3949ab; color: #3949ab; }
+  .card.sm { font-size: 13px; padding: 2px 4px; min-width: 18px; }
+  #winprob { text-align: center; color: #80cbc4; font-size: 14px; font-weight: bold; min-height: 20px; }
+
+  #mycards { position: absolute; left: 50%; bottom: -6px; transform: translate(-50%, 100%); }
+
+  #actionBar { max-width: 960px; margin: 44px auto 10px; text-align: center; min-height: 52px; }
+  button { font-size: 15px; padding: 10px 18px; margin: 4px; border: 0; border-radius: 10px; cursor: pointer; font-weight: bold; }
+  button.act { background: #ffd54f; }
+  button.act:hover { background: #ffe082; }
+  button.danger { background: #ef9a9a; }
+  button.plain { background: #b0bec5; }
+  #hint { text-align: center; color: #ffd54f; font-size: 13px; min-height: 20px; max-width: 800px; margin: 0 auto; }
+  #log { max-width: 960px; margin: 10px auto; background: rgba(0,0,0,.35); border-radius: 8px;
+         padding: 10px 14px; font-size: 12px; max-height: 130px; overflow-y: auto; white-space: pre-wrap; }
+  #overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+             background: rgba(0,0,0,.55); border-radius: 50% / 50%; z-index: 5; }
+  #overlay .msg { font-size: 26px; font-weight: bold; color: #ffd54f; text-align: center; }
+
+  @media (max-width: 640px) {
+    body { padding: 6px; }
+    #topbar h1 { font-size: 14px; }
+    #table { padding-top: 78%; border-width: 6px; }
+    .seat { width: 92px; padding: 4px 6px; border-radius: 8px; }
+    .seat .name { font-size: 11px; }
+    .seat .style { display: none; }
+    .seat .chips { font-size: 10px; }
+    .card { font-size: 14px; padding: 3px 4px; min-width: 17px; border-radius: 4px; }
+    .card.sm { font-size: 10px; padding: 1px 3px; min-width: 12px; }
+    .bubble { font-size: 10px; top: -20px; padding: 2px 7px; }
+    .bet { font-size: 10px; padding: 1px 6px; }
+    #pot { font-size: 12px; }
+    button { font-size: 13px; padding: 8px 12px; margin: 3px; }
+    #actionBar { margin-top: 30px; min-height: 44px; }
+    #overlay .msg { font-size: 19px; }
+    #log { font-size: 11px; max-height: 100px; }
+  }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <h1>ポーカーAI テーブル</h1>
+  <button class="plain" onclick="createT('beginner')">初級</button>
+  <button class="plain" onclick="createT('intermediate')">中級</button>
+  <button class="plain" onclick="createT('advanced')">上級</button>
+  <span class="badge" id="blind">未開始</span>
+  <span class="badge" id="stage" style="background:#80cbc4"></span>
+</div>
+
+<div id="tableWrap">
+  <div id="table">
+    <div id="center">
+      <div id="pot"></div>
+      <div id="board"></div>
+    </div>
+    <div id="overlay"><div class="msg" id="overlayMsg"></div></div>
+  </div>
+</div>
+
+<div id="actionBar"></div>
+<div id="winprob"></div>
+<div id="hint"></div>
+<div id="log"></div>
+
+<script>
+let tid = null, lastHandNo = 0, lastCount = 0, loggedShowdown = 0;
+const NAMES = {0:"フォールド",1:"チェック/コール",2:"1/2ポット",3:"ポット",4:"オールイン"};
+const BUBBLE = {0:["フォールド","fold"],1:["コール/チェック","call"],2:["レイズ (1/2ポット)","raise"],3:["レイズ (ポット)","raise"],4:["オールイン!","allin"]};
+const POS = {0:[50,90],1:[15,74],2:[13,26],3:[50,9],4:[87,26],5:[85,74]};
+const BETPOS = {0:[50,68],1:[28,62],2:[27,36],3:[50,26],4:[73,36],5:[72,62]};
+let seatEls = {}, folded = new Set();
+
+function cardHtml(c, sm) {
+  const suits = {S:"♠", H:"♥", D:"♦", C:"♣"};
+  const red = (c[0]==="H"||c[0]==="D") ? " red" : "";
+  return `<span class="card${red}${sm?" sm":""}">${suits[c[0]]}${c[1]==="T"?"10":c[1]}</span>`;
+}
+function log(msg) {
+  const el = document.getElementById("log");
+  el.innerHTML = msg + "\n" + el.innerHTML;
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) { log("エラー: " + JSON.stringify(data.detail)); throw data; }
+  return data;
+}
+
+function buildSeats(v) {
+  const table = document.getElementById("table");
+  Object.values(seatEls).forEach(e => { e.seat.remove(); e.bet.remove(); });
+  seatEls = {};
+  for (const s of Object.keys(v.standings.stacks)) {
+    const info = v.seats[s] || {name: "あなた", style: "プレイヤー", description: ""};
+    const seat = document.createElement("div");
+    seat.className = "seat";
+    seat.style.left = POS[s][0] + "%";
+    seat.style.top = POS[s][1] + "%";
+    seat.title = info.description || "";
+    seat.innerHTML = `<div class="bubble" id="bub${s}"></div>
+      <div class="name">${s==0?"🧑 ":""}${info.name}</div>
+      <div class="style">${info.style}</div>
+      <div class="chips" id="chips${s}"></div>
+      <div class="rev" id="rev${s}"></div>
+      ${s==0?'<div id="mycards"></div>':''}`;
+    table.appendChild(seat);
+    const bet = document.createElement("div");
+    bet.className = "bet";
+    bet.style.left = BETPOS[s][0] + "%";
+    bet.style.top = BETPOS[s][1] + "%";
+    bet.style.display = "none";
+    table.appendChild(bet);
+    seatEls[s] = {seat, bet};
+  }
+}
+
+async function createT(level) {
+  const v = await api("/tournaments", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({level})});
+  tid = v.tournament_id;
+  lastHandNo = 0; lastCount = 0; folded = new Set();
+  document.getElementById("log").innerHTML = "";
+  document.getElementById("overlay").style.display = "none";
+  log(`トーナメント開始 (${level})`);
+  buildSeats(v);
+  render(v);
+}
+async function sendAction(id) {
+  const v = await api(`/tournaments/${tid}/action`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:id})});
+  render(v);
+}
+async function nextHand() {
+  const v = await api(`/tournaments/${tid}/next`, {method:"POST"});
+  render(v);
+}
+async function getHint() {
+  const h = await api(`/tournaments/${tid}/hint`);
+  document.getElementById("hint").textContent =
+    `ヒント: 「${NAMES[h.recommended_action.id]}」 — ${h.reason || ""}`;
+}
+
+function showBubble(s, actId) {
+  const b = document.getElementById("bub" + s);
+  if (!b) return;
+  const [label, cls] = BUBBLE[actId];
+  b.textContent = label;
+  b.className = "bubble show " + cls;
+  if (actId === 0) folded.add(String(s));
+}
+
+function render(v) {
+  const st = v.standings;
+  document.getElementById("blind").textContent = `ハンド ${st.hand_no} / BB ${st.big_blind}`;
+  document.getElementById("stage").textContent = v.stage || "";
+  document.getElementById("hint").textContent = "";
+
+  if (st.hand_no !== lastHandNo) {
+    lastHandNo = st.hand_no; lastCount = 0; folded = new Set();
+    document.querySelectorAll(".bubble").forEach(b => b.className = "bubble");
+    document.querySelectorAll(".rev").forEach(r => r.innerHTML = "");
+    if (st.hand_no > 1) log(`--- ハンド ${st.hand_no} (BB ${st.big_blind}) ---`);
+  }
+  const acts = v.hand_actions || [];
+  for (let i = lastCount; i < acts.length; i++) {
+    const a = acts[i];
+    const nm = a.seat === 0 ? "あなた" : ((v.seats[a.seat] && v.seats[a.seat].name) || "席" + a.seat);
+    showBubble(a.seat, a.action_id);
+    log(`${nm}: ${BUBBLE[a.action_id][0]}`);
+  }
+  lastCount = acts.length;
+
+  if (v.hand_finished && v.showdown && loggedShowdown !== st.hand_no) {
+    loggedShowdown = st.hand_no;
+    const sd = v.showdown;
+    for (const s of Object.keys(sd.hands)) {
+      if (s != 0) {
+        const el = document.getElementById("rev" + s);
+        if (el) el.innerHTML = sd.hands[s].map(c => cardHtml(c, true)).join("");
+      }
+      const nm = s == 0 ? "あなた" : ((v.seats[s] && v.seats[s].name) || "席" + s);
+      const rank = sd.rank_names[s] ? ` (${sd.rank_names[s]})` : "";
+      log(`📖 ${nm}: ${sd.hands[s].join(" ")}${rank}`);
+    }
+    if (sd.winners && sd.winners.length) {
+      const wn = sd.winners.map(w => w == 0 ? "あなた" : ((v.seats[w] && v.seats[w].name) || "席" + w)).join(", ");
+      log(`💰 このハンドの勝者: ${wn}`);
+    }
+  }
+
+  for (const s of Object.keys(st.stacks)) {
+    const el = seatEls[s]; if (!el) continue;
+    document.getElementById("chips" + s).textContent = st.stacks[s] + " チップ";
+    el.seat.classList.toggle("out", st.stacks[s] <= 0);
+    el.seat.classList.toggle("folded", folded.has(String(s)) && st.stacks[s] > 0);
+    el.seat.classList.remove("turn");
+    const b = (v.bets || {})[s];
+    if (b && b > 0) { el.bet.textContent = b; el.bet.style.display = "block"; }
+    else { el.bet.style.display = "none"; }
+  }
+  if (v.my_turn && seatEls[0]) seatEls[0].seat.classList.add("turn");
+
+  document.getElementById("winprob").textContent =
+    v.win_probability != null ? `推定勝率: ${Math.round(v.win_probability * 100)}%` : "";
+  document.getElementById("pot").textContent = v.pot != null ? `ポット: ${v.pot}` : "";
+  document.getElementById("board").innerHTML = (v.public_cards || []).map(cardHtml).join("");
+  const mc = document.getElementById("mycards");
+  if (mc) mc.innerHTML = (v.hand || []).map(cardHtml).join("");
+
+  const bar = document.getElementById("actionBar");
+  bar.innerHTML = "";
+  if (st.finished) {
+    const w = v.seats[st.winner] ? v.seats[st.winner].name : "あなた";
+    document.getElementById("overlayMsg").textContent = `🏆 優勝: ${w}`;
+    document.getElementById("overlay").style.display = "flex";
+    log(`トーナメント終了。優勝: ${w}`);
+  } else if (v.my_turn) {
+    for (const a of v.legal_actions) {
+      const cls = a.id === 0 ? "danger" : "act";
+      bar.innerHTML += `<button class="${cls}" onclick="sendAction(${a.id})">${NAMES[a.id]}</button>`;
+    }
+    bar.innerHTML += `<button class="plain" onclick="getHint()">💡 ヒント</button>`;
+  } else if (v.hand_finished) {
+    bar.innerHTML = `<button class="act" onclick="nextHand()">次のハンドへ ▶</button>`;
+  } else {
+    bar.innerHTML = `<span style="color:#b2dfdb">AIの手番...</span>`;
+  }
+}
+</script>
+</body>
+</html>

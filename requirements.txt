@@ -1,0 +1,5 @@
+rlcard[torch]==1.2.0
+setuptools
+matplotlib
+fastapi
+uvicorn
