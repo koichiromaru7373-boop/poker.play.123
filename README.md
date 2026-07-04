@@ -40,6 +40,23 @@ uvicorn api_server:app --port 8000
 | `experiments/dqn_v2/dqn_model_best.pth` | 1対1の中級AIが学習モデルになる |
 | `experiments/dqn_6max/dqn6_model_best.pth` | トーナメントの「ゼロ」が学習モデルになる |
 
+## クラウドに公開する(スマホだけで遊べるようにする)
+
+[Render](https://render.com) の無料枠でホストできます。
+
+1. 軽量モデルを書き出してコミットする(数MB。学習用の巨大pthはGitに入れない):
+   ```
+   python export_model.py
+   git add models && git commit -m "モデル追加" && git push
+   ```
+2. Renderにサインアップ → New → **Blueprint** → このGitHubリポジトリを接続
+   (`render.yaml` が自動で読まれます)
+3. 環境変数 `ACCESS_TOKEN` に好きな合言葉を設定してデプロイ
+4. テスターには `https://<アプリ名>.onrender.com/play?token=<合言葉>` を配る
+
+注意: 無料枠はアクセスが無いとスリープし、再開に1分ほどかかります。
+`ACCESS_TOKEN` を設定しない場合はURLを知る全員がアクセスできる状態になります。
+
 ## 開発者向け
 - API仕様: [API_SPEC.md](API_SPEC.md)
 - プロジェクト全体の文脈・学習スクリプトの使い方: [CLAUDE.md](CLAUDE.md)

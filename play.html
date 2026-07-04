@@ -123,7 +123,10 @@ function log(msg) {
   const el = document.getElementById("log");
   el.innerHTML = msg + "\n" + el.innerHTML;
 }
+const TOKEN = new URLSearchParams(location.search).get("token");
+
 async function api(path, opts) {
+  if (TOKEN) path += (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
   const res = await fetch(path, opts);
   const data = await res.json();
   if (!res.ok) { log("エラー: " + JSON.stringify(data.detail)); throw data; }

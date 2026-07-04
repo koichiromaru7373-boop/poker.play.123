@@ -8,6 +8,9 @@ experiments/
 *.pth
 dqn_model.pth
 
+# デプロイ用の軽量モデルはGitに含める(export_model.pyで生成)
+!models/*.pth
+
 # ローカル専用・不要ファイル
 nohup.out
 *.log

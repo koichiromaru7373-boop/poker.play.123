@@ -1,0 +1,7 @@
+# クラウドデプロイ用(Linux/CPU)。学習用の依存は含まない
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+rlcard==1.2.0
+setuptools
+fastapi
+uvicorn

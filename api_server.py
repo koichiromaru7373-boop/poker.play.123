@@ -23,7 +23,7 @@ import uuid
 
 import torch
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import rlcard
@@ -119,28 +119,55 @@ def count_active_opponents(env, my_pid):
             n += 1
     return max(1, n)
 
-# ---- 難易度 → モデルの対応(ファイル差し替えで調整) ----
-# v5(拡張観測68次元)があればヘッズアップ上級に採用。無ければv4にフォールバック
+# ---- 難易度 → モデルの対応 ----
+# models/ の軽量版(デプロイ用)を最優先、無ければ experiments/ の学習出力を使う
+def _pick(*paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None  # None = RuleBasedAgent
+
+
+SLIM_ADV = os.path.join("models", "heads_up_advanced.pth")
 V5_BEST = os.path.join("experiments", "dqn_v5", "dqn_model_best.pth")
 MODEL_PATHS = {
     "heads_up": {
         "beginner": None,  # None = RuleBasedAgent
-        "intermediate": os.path.join("experiments", "dqn_v2", "dqn_model_best.pth"),
-        "advanced": V5_BEST if os.path.exists(V5_BEST)
-                    else os.path.join("experiments", "dqn_v4", "dqn_model_best.pth"),
+        "intermediate": _pick(os.path.join("models", "heads_up_intermediate.pth"),
+                              os.path.join("experiments", "dqn_v2", "dqn_model_best.pth")),
+        "advanced": _pick(SLIM_ADV, V5_BEST,
+                          os.path.join("experiments", "dqn_v4", "dqn_model_best.pth")),
     },
     "six_max": {
         "beginner": None,
-        "intermediate": os.path.join("experiments", "dqn_6max", "dqn6_model_best.pth"),
-        "advanced": os.path.join("experiments", "dqn_6max", "dqn6_model_best.pth"),
+        "intermediate": _pick(os.path.join("models", "six_max.pth"),
+                              os.path.join("experiments", "dqn_6max", "dqn6_model_best.pth")),
+        "advanced": _pick(os.path.join("models", "six_max.pth"),
+                          os.path.join("experiments", "dqn_6max", "dqn6_model_best.pth")),
     },
 }
+# 拡張観測(68次元)が必要なモデル
+EXTENDED_MODELS = {SLIM_ADV, V5_BEST}
 
 ACTION_NAMES = {0: "fold", 1: "check_call", 2: "raise_half_pot", 3: "raise_pot", 4: "all_in"}
 USER_SEAT = 0
 
 app = FastAPI(title="Poker AI API")
 tables = {}  # table_id -> dict(env, ai_agents, mode, level, finished, payoffs)
+
+# 環境変数 ACCESS_TOKEN を設定すると、?token=<値> が無いアクセスを拒否する
+# (クラウド公開時の簡易ガード。未設定ならチェックなし=ローカル用)
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
+
+
+@app.middleware("http")
+async def token_guard(request, call_next):
+    if ACCESS_TOKEN:
+        token = (request.query_params.get("token")
+                 or request.headers.get("x-access-token"))
+        if token != ACCESS_TOKEN:
+            return JSONResponse({"detail": "アクセストークンが必要です"}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/play")
@@ -229,8 +256,9 @@ def create_table(req: CreateTable):
         raise HTTPException(400, "level は beginner/intermediate/advanced")
 
     num_players = 2 if req.mode == "heads_up" else 6
-    # v5モデル(68次元)を使うテーブルは拡張観測環境で作る
-    use_extended = MODEL_PATHS[req.mode][req.level] == V5_BEST and os.path.exists(V5_BEST)
+    # v5系モデル(68次元)を使うテーブルは拡張観測環境で作る
+    path = MODEL_PATHS[req.mode][req.level]
+    use_extended = path in EXTENDED_MODELS and path is not None and os.path.exists(path)
     if use_extended:
         env = make_extended_env(num_players=num_players)
     else:
@@ -490,3 +518,9 @@ def tournament_next(tournament_id: str):
         raise HTTPException(400, "ハンドがまだ終わっていません")
     t_start_hand(rec)
     return t_view(tournament_id)
+
+
+if __name__ == "__main__":
+    # `python api_server.py` でも起動できるようにする
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
