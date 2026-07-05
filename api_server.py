@@ -20,6 +20,7 @@
 
 import os
 import uuid
+from typing import Optional
 
 import torch
 from fastapi import FastAPI, HTTPException
@@ -28,12 +29,16 @@ from pydantic import BaseModel
 
 import rlcard
 
+import free_raise
 from equity import estimate_win_prob, hand_rank_name
 from extended_env import make_extended_env
 from gto_hints import GTOHybridAgent, postflop_note, preflop_hint
 from my_agents import RuleBasedAgent
 from personas import build_tournament_agents
 from tournament import Tournament
+
+# 任意額レイズ(人間のみ)を有効化。AI・ヒント・勝率は離散のまま。
+free_raise.enable()
 
 NFSP_PATH = os.path.join("experiments", "nfsp", "nfsp_model_best.pth")
 
@@ -104,9 +109,12 @@ def capture_reveal(env, seat_of):
                 ranks[str(seat_of[pid])] = rank
         winners = [seat_of[pid] for pid in range(len(env.game.players))
                    if float(payoffs[pid]) > 0]
+        # ボードは手札と同じ get_index() 形式(suit+rank)で返す。
+        # ※ str(card) は rank+suit を返すためフロントで表示が壊れる
         if len(hands) < 2:
             hands, ranks = {}, {}  # 全員降りで決着: ハンド開示なし
-        return {"hands": hands, "rank_names": ranks, "winners": winners}
+        return {"hands": hands, "rank_names": ranks, "winners": winners,
+                "public_cards": public}
     except Exception:
         return None
 
@@ -195,6 +203,9 @@ class CreateTable(BaseModel):
 
 class UserAction(BaseModel):
     action: int  # 0=fold 1=check/call 2=raise half pot 3=raise pot 4=all-in
+    # amount 指定時は任意額レイズ(= レイズ後の自分の総 in_chips, ゲーム内単位)。
+    # 未指定なら従来通り action の離散アクションで打つ。
+    amount: Optional[int] = None
 
 
 def advance_ai(table):
@@ -237,6 +248,15 @@ def user_view(table_id):
             {"id": int(a), "name": ACTION_NAMES[int(a)]}
             for a in state["legal_actions"].keys()
         ]
+        # 任意額レイズ用のレンジ(自分の手番のときだけ)
+        if env.get_player_id() == USER_SEAT:
+            try:
+                b = free_raise.raise_bounds(env)
+                view["to_call"] = b["to_call"]
+                view["raise_min"] = b["min_to"]
+                view["raise_max"] = b["max_to"]
+            except Exception:
+                pass
     return view
 
 
@@ -297,10 +317,17 @@ def post_action(table_id: str, req: UserAction):
         raise HTTPException(400, "ユーザーの手番ではありません")
 
     state = env.get_state(USER_SEAT)
-    if req.action not in state["legal_actions"]:
-        raise HTTPException(400, f"不正なアクション。legal: {list(state['legal_actions'].keys())}")
+    if req.amount is not None:
+        # 任意額レイズ
+        try:
+            free_raise.apply_raise_to(env, req.amount)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    else:
+        if req.action not in state["legal_actions"]:
+            raise HTTPException(400, f"不正なアクション。legal: {list(state['legal_actions'].keys())}")
+        env.step(req.action)
 
-    env.step(req.action)
     if env.is_over():
         table["finished"] = True
         table["payoffs"] = [float(p) for p in env.get_payoffs()]
@@ -350,6 +377,7 @@ class CreateTournament(BaseModel):
 
 class TournamentAction(BaseModel):
     action: int
+    amount: Optional[int] = None  # 任意額レイズ(レイズ後の総 in_chips, ゲーム内単位)
 
 
 def t_advance(rec):
@@ -405,6 +433,14 @@ def t_view(tournament_id):
     reveal = rec.get("reveal")
     if rec["hand_finished"] and reveal:
         view["showdown"] = reveal
+        # 決着時の最終ボードを送る(これが無いとフロントがランナウトできない)
+        if reveal.get("public_cards"):
+            view["public_cards"] = reveal["public_cards"]
+        # 自分がショーダウンまで残っていたら手札も返す
+        #  → フロントの「自分が残っている時だけリバーまで演出」を有効化
+        uh = reveal["hands"].get(str(USER_SEAT))
+        if uh:
+            view["hand"] = uh
         if str(USER_SEAT) not in reveal["hands"]:
             view["ai_hands_revealed"] = reveal["hands"]  # 降りたユーザーへの学習用開示
     if t.finished:
@@ -431,6 +467,13 @@ def t_view(tournament_id):
                     {"id": int(a), "name": ACTION_NAMES[int(a)]}
                     for a in state["legal_actions"].keys()
                 ]
+                try:
+                    b = free_raise.raise_bounds(env)
+                    view["to_call"] = b["to_call"]
+                    view["raise_min"] = b["min_to"]
+                    view["raise_max"] = b["max_to"]
+                except Exception:
+                    pass
                 view["win_probability"] = estimate_win_prob(
                     view.get("hand", []), view.get("public_cards", []),
                     num_opponents=count_active_opponents(env, pid),
@@ -476,11 +519,21 @@ def tournament_action(tournament_id: str, req: TournamentAction):
     if alive[pid] != USER_SEAT:
         raise HTTPException(400, "ユーザーの手番ではありません")
     state = env.get_state(pid)
-    if req.action not in state["legal_actions"]:
-        raise HTTPException(400, f"不正なアクション。legal: {list(state['legal_actions'].keys())}")
-    rec.setdefault("hand_actions", []).append(
-        {"seat": USER_SEAT, "action_id": int(req.action)})
-    env.step(req.action)
+    if req.amount is not None:
+        # 任意額レイズ
+        try:
+            target = free_raise.apply_raise_to(env, req.amount)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        rec.setdefault("hand_actions", []).append(
+            {"seat": USER_SEAT, "action_id": 3, "amount": int(target)})
+    else:
+        if req.action not in state["legal_actions"]:
+            raise HTTPException(400, f"不正なアクション。legal: {list(state['legal_actions'].keys())}")
+        rec.setdefault("hand_actions", []).append(
+            {"seat": USER_SEAT, "action_id": int(req.action)})
+        env.step(req.action)
+
     if env.is_over():
         rec["reveal"] = capture_reveal(env, alive)
         t.settle()
