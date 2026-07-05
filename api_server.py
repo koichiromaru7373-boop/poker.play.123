@@ -32,6 +32,7 @@ import rlcard
 import free_raise
 from equity import estimate_win_prob, hand_rank_name
 from extended_env import make_extended_env
+from extended_env_v6 import make_extended_env_v6  # v7(NFSP/70次元)用
 from gto_hints import GTOHybridAgent, postflop_note, preflop_hint
 from my_agents import RuleBasedAgent
 from personas import build_tournament_agents
@@ -138,12 +139,17 @@ def _pick(*paths):
 
 SLIM_ADV = os.path.join("models", "heads_up_advanced.pth")
 V5_BEST = os.path.join("experiments", "dqn_v5", "dqn_model_best.pth")
+# v7(NFSP・70次元)。models/ の slim を最優先、無ければ experiments のベスト。
+# ※ 本番(Render)は models/ しか読めない → slim を export & commit した時だけ本番で有効化される。
+#    ローカルは experiments/nfsp_v7 のベストがあれば自動で使う(動作確認用)。
+V7_SLIM = os.path.join("models", "heads_up_advanced_v7.pth")
+V7_BEST = os.path.join("experiments", "nfsp_v7", "nfsp_model_best.pth")
 MODEL_PATHS = {
     "heads_up": {
         "beginner": None,  # None = RuleBasedAgent
         "intermediate": _pick(os.path.join("models", "heads_up_intermediate.pth"),
                               os.path.join("experiments", "dqn_v2", "dqn_model_best.pth")),
-        "advanced": _pick(SLIM_ADV, V5_BEST,
+        "advanced": _pick(V7_SLIM, V7_BEST, SLIM_ADV, V5_BEST,
                           os.path.join("experiments", "dqn_v4", "dqn_model_best.pth")),
     },
     "six_max": {
@@ -154,8 +160,9 @@ MODEL_PATHS = {
                           os.path.join("experiments", "dqn_6max", "dqn6_model_best.pth")),
     },
 }
-# 拡張観測(68次元)が必要なモデル
-EXTENDED_MODELS = {SLIM_ADV, V5_BEST}
+# 拡張観測が必要なモデル
+EXTENDED_MODELS = {SLIM_ADV, V5_BEST}        # 68次元(v5)
+EXTENDED_V6_MODELS = {V7_SLIM, V7_BEST}      # 70次元(v6/v7)
 
 ACTION_NAMES = {0: "fold", 1: "check_call", 2: "raise_half_pot", 3: "raise_pot", 4: "all_in"}
 USER_SEAT = 0
@@ -276,10 +283,14 @@ def create_table(req: CreateTable):
         raise HTTPException(400, "level は beginner/intermediate/advanced")
 
     num_players = 2 if req.mode == "heads_up" else 6
-    # v5系モデル(68次元)を使うテーブルは拡張観測環境で作る
+    # モデルに合わせて観測環境を選ぶ: v7=70次元 / v5=68次元 / それ以外=標準54次元
     path = MODEL_PATHS[req.mode][req.level]
-    use_extended = path in EXTENDED_MODELS and path is not None and os.path.exists(path)
-    if use_extended:
+    exists = path is not None and os.path.exists(path)
+    use_v6 = exists and path in EXTENDED_V6_MODELS
+    use_extended = exists and path in EXTENDED_MODELS
+    if use_v6:
+        env = make_extended_env_v6(num_players=num_players)
+    elif use_extended:
         env = make_extended_env(num_players=num_players)
     else:
         env = rlcard.make("no-limit-holdem", config={"game_num_players": num_players})
@@ -291,7 +302,7 @@ def create_table(req: CreateTable):
     tables[table_id] = {
         "env": env, "ai_agents": ai_agents,
         "mode": req.mode, "level": req.level,
-        "extended": use_extended,
+        "extended": use_v6 or use_extended,  # 拡張観測: ヒントは自卓AIを使う
         "finished": False, "payoffs": None,
     }
     new_hand(tables[table_id])
